@@ -200,7 +200,9 @@
       if (s.tipo === 'situazione') valori[s.id] = valoreVuoto(s);
     });
     destinazione.valori = valori;
+    destinazione.extra = normalizzaExtra(clona(sorgente.extra || []));
     if (!destinazione.libro) destinazione.libro = testo(sorgente.libro);
+    // La firma non si copia: il nuovo piano va firmato di nuovo.
     return destinazione;
   }
 
@@ -274,7 +276,38 @@
       valori: isOggetto(p.valori) ? p.valori : {}
     };
     CAMPI_DATI.forEach(function (c) { out[c.id] = testo(p[c.id]); });
+    var extra = normalizzaExtra(p.extra);
+    if (extra.length) out.extra = extra;
+    var firma = firmaValida(p.firma);
+    if (firma) out.firma = firma;
     return out;
+  }
+
+  // Sezioni non previste dal modello d'istituto (di solito da un piano importato).
+  function normalizzaExtra(extra) {
+    return Array.isArray(extra) ? extra.filter(isOggetto).map(function (x) {
+      return { id: testo(x.id) || uid(), titolo: testo(x.titolo), testo: testo(x.testo) };
+    }) : [];
+  }
+
+  function nuovaSezioneExtra(titolo, contenuto) {
+    return { id: uid(), titolo: testo(titolo), testo: testo(contenuto) };
+  }
+
+  // Accetta solo immagini PNG in base64: i piani possono arrivare da file di altri.
+  function firmaValida(f) {
+    if (!isOggetto(f) || !/^data:image\/png;base64,[A-Za-z0-9+\/]+=*$/.test(testo(f.immagine))) return null;
+    return {
+      immagine: f.immagine,
+      data: /^\d{4}-\d{2}-\d{2}$/.test(testo(f.data)) ? f.data : new Date().toISOString().slice(0, 10),
+      momento: testo(f.momento)
+    };
+  }
+
+  // Vero se il piano è stato modificato dopo la firma.
+  function modificatoDopoFirma(p) {
+    var f = firmaValida(p.firma);
+    return !!(f && f.momento && testo(p.modificato) > f.momento);
   }
 
   /* ---------- Import / export ---------- */
@@ -347,6 +380,10 @@
     avanzamento: avanzamento,
     avvisiSituazione: avvisiSituazione,
     normalizzaPiano: normalizzaPiano,
+    normalizzaExtra: normalizzaExtra,
+    nuovaSezioneExtra: nuovaSezioneExtra,
+    firmaValida: firmaValida,
+    modificatoDopoFirma: modificatoDopoFirma,
     pacchettoModello: pacchettoModello,
     pacchettoPiani: pacchettoPiani,
     leggiPacchetto: leggiPacchetto,

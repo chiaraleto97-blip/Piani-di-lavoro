@@ -1,7 +1,9 @@
 /*
  * Generazione del documento finale (anteprima, stampa/PDF, Word).
- * Produce HTML come stringa: tutto il testo inserito dall'utente viene
- * sempre passato da esc().
+ * Il piano viene prima tradotto in una sequenza di blocchi (titoli,
+ * paragrafi, elenchi, tabelle, firma); da questa derivano sia l'HTML
+ * dell'anteprima sia il file Word (vedi word.js), così l'aspetto è lo stesso.
+ * Tutto il testo inserito dall'utente viene sempre passato da esc().
  */
 (function (root) {
   'use strict';
@@ -15,16 +17,18 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  function testo(s) { return String(s == null ? '' : s); }
+
+  /* ---------- Costruzione dei blocchi ---------- */
+
+  function par(t, classe) { return { t: 'p', runs: [{ testo: t }], classe: classe }; }
+
   function paragrafi(s) {
-    var blocchi = String(s == null ? '' : s).split(/\n\s*\n/).map(function (b) { return b.trim(); }).filter(Boolean);
-    return blocchi.map(function (b) { return '<p>' + esc(b).replace(/\n/g, '<br>') + '</p>'; }).join('');
+    return testo(s).split(/\n\s*\n/).map(function (b) { return b.trim(); }).filter(Boolean)
+      .map(function (b) { return par(b); });
   }
 
-  function multilinea(s) {
-    return esc(String(s == null ? '' : s).trim()).replace(/\n/g, '<br>');
-  }
-
-  var VUOTO = '<p class="doc-vuoto">Sezione non compilata.</p>';
+  var VUOTO = par('Sezione non compilata.', 'vuoto');
 
   // Voci selezionate nell'ordine del modello, seguite da eventuali voci
   // non più presenti nel modello e dalle voci aggiunte a mano ("altro").
@@ -35,113 +39,198 @@
     return voci.concat(model.righe(v.altro));
   }
 
-  function elenco(voci, numerato) {
-    if (!voci.length) return '';
-    var tag = numerato ? 'ol' : 'ul';
-    return '<' + tag + '>' + voci.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</' + tag + '>';
+  function lista(voci, numerata) {
+    return voci.length ? [{ t: 'lista', numerata: !!numerata, voci: voci }] : [];
   }
 
-  function sezioneSituazione(piano, sez, modello) {
+  function bloccoSituazione(piano, sez, modello) {
     var v = model.valoreSezione(piano, sez);
     var n = v.num;
-    var html = '';
+    var out = [];
     var tot = Number(n.alunni) || 0;
     if (tot) {
-      var frase = 'La classe è composta da <strong>' + tot + '</strong> alunni';
-      if (n.maschi || n.femmine) frase += ' (' + (Number(n.maschi) || 0) + ' maschi, ' + (Number(n.femmine) || 0) + ' femmine)';
-      html += '<p>' + frase + '.</p>';
+      var runs = [{ testo: 'La classe è composta da ' }, { testo: String(tot), b: true }, { testo: ' alunni' }];
+      if (n.maschi || n.femmine) runs.push({ testo: ' (' + (Number(n.maschi) || 0) + ' maschi, ' + (Number(n.femmine) || 0) + ' femmine)' });
+      runs.push({ testo: '.' });
+      out.push({ t: 'p', runs: runs });
     }
     var altri = model.CAMPI_SITUAZIONE.slice(3).filter(function (c) { return Number(n[c.id]) > 0; });
     if (altri.length) {
-      html += '<table class="doc-tab"><tr>' + altri.map(function (c) { return '<th>' + esc(c.etichetta) + '</th>'; }).join('') +
-        '</tr><tr>' + altri.map(function (c) { return '<td>' + esc(n[c.id]) + '</td>'; }).join('') + '</tr></table>';
+      out.push({
+        t: 'tabella', classe: 'orizzontale',
+        intestazione: altri.map(function (c) { return c.etichetta; }),
+        righe: [altri.map(function (c) { return testo(n[c.id]); })]
+      });
     }
-    var livelli = modello.livelli.filter(function (l) { return Number(v.livelli[l]) > 0; });
-    if (livelli.length) {
-      html += '<p class="doc-sotto">Fasce di livello</p><table class="doc-tab"><tr>' +
-        modello.livelli.map(function (l) { return '<th>' + esc(l) + '</th>'; }).join('') + '</tr><tr>' +
-        modello.livelli.map(function (l) { return '<td>' + esc(Number(v.livelli[l]) || 0) + '</td>'; }).join('') + '</tr></table>';
+    if (modello.livelli.some(function (l) { return Number(v.livelli[l]) > 0; })) {
+      out.push(par('Fasce di livello', 'sotto'));
+      out.push({
+        t: 'tabella', classe: 'orizzontale',
+        intestazione: modello.livelli.slice(),
+        righe: [modello.livelli.map(function (l) { return String(Number(v.livelli[l]) || 0); })]
+      });
     }
     var strumenti = vociSelezionate(v, sez.opzioni);
-    if (strumenti.length) html += '<p class="doc-sotto">Strumenti di rilevazione</p>' + elenco(strumenti);
-    if (String(v.note || '').trim()) html += '<p class="doc-sotto">Osservazioni sulla classe</p>' + paragrafi(v.note);
-    return html || VUOTO;
+    if (strumenti.length) out.push(par('Strumenti di rilevazione', 'sotto'));
+    out = out.concat(lista(strumenti));
+    if (testo(v.note).trim()) out = out.concat([par('Osservazioni sulla classe', 'sotto')], paragrafi(v.note));
+    return out.length ? out : [VUOTO];
   }
 
-  function sezioneChecklist(piano, sez, modello) {
+  function bloccoChecklist(piano, sez, modello) {
     var v = model.valoreSezione(piano, sez);
-    var html = elenco(vociSelezionate(v, model.opzioniSezione(sez, piano, modello)), sez.tipo === 'traguardi');
-    var campi = (sez.campi || []).filter(function (c) { return String((v.campi || {})[c.id] || '').trim(); });
+    var out = lista(vociSelezionate(v, model.opzioniSezione(sez, piano, modello)), sez.tipo === 'traguardi');
+    var campi = (sez.campi || []).filter(function (c) { return testo((v.campi || {})[c.id]).trim(); });
     if (campi.length) {
-      html += '<table class="doc-tab doc-campi">' + campi.map(function (c) {
-        return '<tr><th>' + esc(c.etichetta) + '</th><td>' + esc(v.campi[c.id]) + '</td></tr>';
-      }).join('') + '</table>';
+      out.push({
+        t: 'tabella', classe: 'campi', intestazioneColonna: true, larghezze: [60, 40],
+        righe: campi.map(function (c) { return [c.etichetta, testo(v.campi[c.id])]; })
+      });
     }
-    if (String(v.note || '').trim()) html += paragrafi(v.note);
-    return html || VUOTO;
+    out = out.concat(paragrafi(v.note));
+    return out.length ? out : [VUOTO];
   }
 
-  function sezioneUda(piano, sez) {
+  function bloccoUda(piano, sez) {
     var unita = model.valoreSezione(piano, sez).unita.filter(function (u) {
-      return ['titolo', 'obiettivi', 'contenuti'].some(function (k) { return String(u[k] || '').trim(); });
+      return ['titolo', 'obiettivi', 'contenuti'].some(function (k) { return testo(u[k]).trim(); });
     });
-    if (!unita.length) return VUOTO;
-    return '<table class="doc-tab doc-uda"><thead><tr><th style="width:4%">N.</th><th style="width:22%">Unità e tempi</th>' +
-      '<th style="width:18%">Nuclei tematici</th><th style="width:28%">Obiettivi di apprendimento</th><th style="width:28%">Contenuti e attività</th></tr></thead><tbody>' +
-      unita.map(function (u, i) {
+    if (!unita.length) return [VUOTO];
+    return [{
+      t: 'tabella', classe: 'uda',
+      intestazione: ['N.', 'Unità e tempi', 'Nuclei tematici', 'Obiettivi di apprendimento', 'Contenuti e attività'],
+      larghezze: [5, 21, 18, 28, 28],
+      righe: unita.map(function (u, i) {
         var tempi = [u.periodo, u.ore ? u.ore + ' ore' : ''].filter(Boolean).join(' · ');
-        return '<tr><td>' + (i + 1) + '</td><td><strong>' + multilinea(u.titolo) + '</strong>' +
-          (tempi ? '<br><em>' + esc(tempi) + '</em>' : '') + '</td><td>' + esc((u.nuclei || []).join('; ')) +
-          '</td><td>' + multilinea(u.obiettivi) + '</td><td>' + multilinea(u.contenuti) + '</td></tr>';
-      }).join('') + '</tbody></table>';
+        var prima = [{ testo: testo(u.titolo).trim(), b: true }];
+        if (tempi) prima.push({ testo: '\n' + tempi, i: true });
+        return [String(i + 1), prima, (u.nuclei || []).join('; '), testo(u.obiettivi).trim(), testo(u.contenuti).trim()];
+      })
+    }];
   }
 
   function corpoSezione(piano, sez, modello) {
     switch (sez.tipo) {
-      case 'situazione': return sezioneSituazione(piano, sez, modello);
+      case 'situazione': return bloccoSituazione(piano, sez, modello);
       case 'checklist':
-      case 'traguardi': return sezioneChecklist(piano, sez, modello);
-      case 'uda': return sezioneUda(piano, sez);
+      case 'traguardi': return bloccoChecklist(piano, sez, modello);
+      case 'uda': return bloccoUda(piano, sez);
       case 'testo': {
-        var t = model.valoreSezione(piano, sez).note;
-        return String(t || '').trim() ? paragrafi(t) : VUOTO;
+        var p = paragrafi(model.valoreSezione(piano, sez).note);
+        return p.length ? p : [VUOTO];
       }
-      default: return '';
+      default: return [];
     }
   }
 
   function intestazione(piano, modello) {
     var sc = modello.scuola;
-    var righeDati = model.CAMPI_DATI.filter(function (c) {
-      return ['anno'].indexOf(c.id) < 0 && String(piano[c.id] || '').trim();
+    var righe = [];
+    if (sc.nome) righe.push({ testo: sc.nome, stile: 'scuola' });
+    if (sc.sottotitolo) righe.push({ testo: sc.sottotitolo, stile: 'sottotitolo' });
+    righe.push({ testo: 'Piano di lavoro annuale', stile: 'titolo' });
+    righe.push({ testo: 'Anno scolastico ' + (piano.anno || sc.annoScolastico), stile: 'anno' });
+    var dati = model.CAMPI_DATI.filter(function (c) {
+      return c.id !== 'anno' && c.id !== 'sezione' && testo(piano[c.id]).trim();
     }).map(function (c) {
-      var val = c.id === 'classe' ? piano.classe + (piano.sezione ? ' ' + piano.sezione : '') : piano[c.id];
-      return c.id === 'sezione' ? '' : '<tr><th>' + esc(c.etichetta) + '</th><td>' + esc(val) + '</td></tr>';
-    }).join('');
-    return '<header class="doc-testata">' +
-      (sc.nome ? '<div class="doc-scuola">' + esc(sc.nome) + '</div>' : '') +
-      (sc.sottotitolo ? '<div class="doc-sottotitolo">' + esc(sc.sottotitolo) + '</div>' : '') +
-      '<h1 class="doc-titolo">Piano di lavoro annuale</h1>' +
-      '<div class="doc-anno">Anno scolastico ' + esc(piano.anno || sc.annoScolastico) + '</div>' +
-      '</header><table class="doc-tab doc-dati">' + righeDati + '</table>';
+      return [c.etichetta, c.id === 'classe' ? piano.classe + (piano.sezione ? ' ' + piano.sezione : '') : testo(piano[c.id])];
+    });
+    return [{ t: 'testata', righe: righe }, { t: 'tabella', classe: 'dati', intestazioneColonna: true, larghezze: [30, 70], righe: dati }];
   }
 
-  function firma(piano, modello) {
-    var luogo = modello.scuola.citta ? esc(modello.scuola.citta) + ', ' : 'Luogo e data: ';
-    return '<div class="doc-firma"><div>' + luogo + '____________________</div>' +
-      '<div class="doc-firma-docente">Il/La docente<br><span>' + esc(piano.docente || '') + '</span></div></div>';
+  function dataLeggibile(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(testo(iso));
+    return m ? m[3] + '/' + m[2] + '/' + m[1] : '';
+  }
+
+  function bloccoFirma(piano, modello) {
+    var f = model.firmaValida(piano.firma);
+    return {
+      t: 'firma',
+      luogo: modello.scuola.citta || '',
+      data: f ? dataLeggibile(f.data) : '',
+      docente: piano.docente || '',
+      immagine: f ? f.immagine : ''
+    };
+  }
+
+  function strutturaPiano(piano, modello) {
+    var blocchi = intestazione(piano, modello);
+    var n = 0;
+    model.sezioniAttive(modello).forEach(function (s) {
+      if (s.tipo === 'dati') return;
+      n++;
+      blocchi.push({ t: 'h2', testo: n + '. ' + s.titolo });
+      blocchi = blocchi.concat(corpoSezione(piano, s, modello));
+    });
+    (piano.extra || []).forEach(function (x) {
+      n++;
+      blocchi.push({ t: 'h2', testo: n + '. ' + (testo(x.titolo).trim() || 'Sezione aggiuntiva') });
+      var p = paragrafi(x.testo);
+      blocchi = blocchi.concat(p.length ? p : [VUOTO]);
+    });
+    blocchi.push(bloccoFirma(piano, modello));
+    return blocchi;
+  }
+
+  /* ---------- HTML ---------- */
+
+  function htmlRuns(runs) {
+    return runs.map(function (r) {
+      var h = esc(r.testo).replace(/\n/g, '<br>');
+      if (r.i) h = '<em>' + h + '</em>';
+      if (r.b) h = '<strong>' + h + '</strong>';
+      return h;
+    }).join('');
+  }
+
+  function htmlCella(c) {
+    return Array.isArray(c) ? htmlRuns(c) : esc(c).replace(/\n/g, '<br>');
+  }
+
+  function htmlTabella(b) {
+    var larg = function (i) { return b.larghezze ? ' style="width:' + b.larghezze[i] + '%"' : ''; };
+    var h = '<table class="doc-tab doc-' + b.classe + '">';
+    if (b.intestazione) {
+      h += '<thead><tr>' + b.intestazione.map(function (x, i) { return '<th' + larg(i) + '>' + esc(x) + '</th>'; }).join('') + '</tr></thead>';
+    }
+    h += '<tbody>' + b.righe.map(function (r) {
+      return '<tr>' + r.map(function (c, i) {
+        var tag = b.intestazioneColonna && i === 0 ? 'th' : 'td';
+        return '<' + tag + (b.intestazione ? '' : larg(i)) + '>' + htmlCella(c) + '</' + tag + '>';
+      }).join('') + '</tr>';
+    }).join('') + '</tbody></table>';
+    return h;
+  }
+
+  function htmlBlocco(b) {
+    switch (b.t) {
+      case 'testata':
+        return '<header class="doc-testata">' + b.righe.map(function (r) {
+          return r.stile === 'titolo' ? '<h1 class="doc-titolo">' + esc(r.testo) + '</h1>' : '<div class="doc-' + r.stile + '">' + esc(r.testo) + '</div>';
+        }).join('') + '</header>';
+      case 'h2': return '<h2>' + esc(b.testo) + '</h2>';
+      case 'p': return '<p' + (b.classe ? ' class="doc-' + b.classe + '"' : '') + '>' + htmlRuns(b.runs) + '</p>';
+      case 'lista': {
+        var tag = b.numerata ? 'ol' : 'ul';
+        return '<' + tag + '>' + b.voci.map(function (v) { return '<li>' + esc(v) + '</li>'; }).join('') + '</' + tag + '>';
+      }
+      case 'tabella': return htmlTabella(b);
+      case 'firma':
+        return '<div class="doc-firma"><div>' + (b.luogo ? esc(b.luogo) + ', ' : 'Luogo e data: ') +
+          (b.data ? esc(b.data) : '____________________') + '</div>' +
+          '<div class="doc-firma-docente">Il/La docente' +
+          (b.immagine ? '<img class="doc-firma-img" alt="Firma" src="' + esc(b.immagine) + '">' : '') +
+          '<span' + (b.immagine ? ' class="firmato"' : '') + '>' + esc(b.docente) + '</span></div></div>';
+      default: return '';
+    }
   }
 
   function renderPiano(piano, modello) {
-    var n = 0;
-    var corpo = model.sezioniAttive(modello).filter(function (s) { return s.tipo !== 'dati'; }).map(function (s) {
-      n++;
-      return '<section class="doc-sezione"><h2>' + n + '. ' + esc(s.titolo) + '</h2>' + corpoSezione(piano, s, modello) + '</section>';
-    }).join('');
-    return '<article class="doc">' + intestazione(piano, modello) + corpo + firma(piano, modello) + '</article>';
+    return '<article class="doc">' + strutturaPiano(piano, modello).map(htmlBlocco).join('') + '</article>';
   }
 
-  // Stili del documento, condivisi da anteprima, stampa e Word.
+  // Stili del documento per anteprima e stampa (word.js li riproduce in Word).
   var CSS_DOCUMENTO = [
     '.doc{font-family:"Times New Roman",Georgia,serif;font-size:12pt;line-height:1.4;color:#111;}',
     '.doc-testata{text-align:center;margin-bottom:14pt;}',
@@ -153,36 +242,24 @@
     '.doc-tab{border-collapse:collapse;width:100%;margin:6pt 0;}',
     '.doc-tab th,.doc-tab td{border:1px solid #666;padding:3pt 5pt;vertical-align:top;text-align:left;font-size:11pt;}',
     '.doc-tab th{background:#eee;}',
-    '.doc-dati th{width:30%;}',
-    '.doc-campi th{width:60%;font-weight:normal;}',
+    '.doc-campi th{font-weight:normal;}',
     '.doc-uda td,.doc-uda th{font-size:10pt;}',
     '.doc-sotto{font-weight:bold;margin:8pt 0 2pt;}',
     '.doc-vuoto{color:#777;font-style:italic;}',
     '.doc ul,.doc ol{margin:4pt 0 4pt 18pt;padding:0;}',
     '.doc p{margin:4pt 0;}',
-    '.doc-firma{margin-top:28pt;display:flex;flex-wrap:wrap;gap:12pt;justify-content:space-between;align-items:flex-end;}',
+    '.doc-firma{margin-top:28pt;display:flex;flex-wrap:wrap;gap:12pt;justify-content:space-between;align-items:flex-end;break-inside:avoid;}',
     '.doc-firma-docente{text-align:center;min-width:160px;}',
-    '.doc-firma-docente span{display:inline-block;margin-top:24pt;border-top:1px solid #111;min-width:160px;padding-top:2pt;}'
+    '.doc-firma-img{display:block;margin:4pt auto 0;max-width:200px;max-height:70px;}',
+    '.doc-firma-docente span{display:inline-block;margin-top:24pt;border-top:1px solid #111;min-width:160px;padding-top:2pt;}',
+    '.doc-firma-docente span.firmato{margin-top:0;}'
   ].join('\n');
-
-  // Documento HTML autonomo che Word e LibreOffice aprono come .doc.
-  function documentoWord(piani, modello) {
-    var corpo = piani.map(function (p, i) {
-      return (i ? '<br clear="all" style="page-break-before:always">' : '') + renderPiano(p, modello);
-    }).join('');
-    return '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">' +
-      '<head><meta charset="utf-8"><title>Piano di lavoro</title>' +
-      '<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->' +
-      '<style>@page{size:21cm 29.7cm;margin:2cm;}body{margin:0;}' + CSS_DOCUMENTO +
-      // Word non gestisce flexbox: firma su due righe.
-      '.doc-firma{display:block;}.doc-firma-docente{text-align:right;margin-top:12pt;}</style></head><body>' +
-      corpo + '</body></html>';
-  }
 
   var api = {
     esc: esc,
+    strutturaPiano: strutturaPiano,
     renderPiano: renderPiano,
-    documentoWord: documentoWord,
+    dataLeggibile: dataLeggibile,
     CSS_DOCUMENTO: CSS_DOCUMENTO
   };
 

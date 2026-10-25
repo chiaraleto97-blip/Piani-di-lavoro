@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  const { model: M, documento: D, store: S } = window.PDL;
+  const { model: M, documento: D, store: S, word: W, importa: I, firma: F } = window.PDL;
   const app = document.getElementById('app');
 
   const stato = {
@@ -13,8 +13,11 @@
     modelloSalvato: false,
     piani: [],
     selezionati: new Set(),
-    filtri: { testo: '', anno: '', classe: '' }
+    filtri: { testo: '', anno: '', classe: '' },
+    importazione: null
   };
+
+  const FORMATI_PIANO = '.docx,.odt,.txt,.doc,.pdf';
 
   const NOMI_CLASSI = { 1: 'Prima', 2: 'Seconda', 3: 'Terza' };
   const ETICHETTE_TIPO = {
@@ -96,6 +99,7 @@
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
   }
 
+  // Restituisce { nome, dati: Uint8Array } del file scelto.
   function chiediFile(accept) {
     return new Promise((risolvi) => {
       const input = h('input', { type: 'file', accept, class: 'nascosto' });
@@ -103,14 +107,18 @@
         const file = input.files && input.files[0];
         input.remove();
         if (!file) return;
-        const lettore = new FileReader();
-        lettore.onload = () => risolvi(String(lettore.result));
-        lettore.onerror = () => toast('Impossibile leggere il file.', 'errore');
-        lettore.readAsText(file, 'utf-8');
+        file.arrayBuffer()
+          .then((b) => risolvi({ nome: file.name, dati: new Uint8Array(b) }))
+          .catch(() => toast('Impossibile leggere il file.', 'errore'));
       });
       document.body.append(input);
       input.click();
     });
+  }
+
+  function dataOggi() {
+    const d = new Date();
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   }
 
   function dataBreve(iso) {
@@ -185,7 +193,7 @@
     if (timerModello) salvaModelloOra();
     const parti = location.hash.replace(/^#\/?/, '').split('/');
     const vista = parti[0] || 'piani';
-    const sezioneNav = vista === 'piano' || vista === 'anteprima' ? 'piani' : vista;
+    const sezioneNav = ['piano', 'anteprima', 'importa'].includes(vista) ? 'piani' : vista;
     document.querySelectorAll('[data-nav]').forEach((a) => {
       const attivo = a.dataset.nav === sezioneNav;
       a.classList.toggle('attivo', attivo);
@@ -199,6 +207,7 @@
       case 'anteprima': vistaAnteprima(decodeURIComponent(parti[1] || '').split(',')); break;
       case 'modello': vistaModello(); break;
       case 'guida': vistaGuida(); break;
+      case 'importa': vistaImporta(); break;
       default: vistaElenco();
     }
     adattaTutte();
@@ -223,6 +232,7 @@
     app.append(intestazioneVista('I miei piani di lavoro',
       n ? `${n} ${n === 1 ? 'piano salvato' : 'piani salvati'} in questo browser` : null,
       n ? bottone('Backup di tutti i piani', () => esportaPiani(stato.piani, 'Backup piani di lavoro.json')) : null,
+      bottone('Importa un piano già scritto', importaPianoEsistente),
       bottone('+ Nuovo piano', () => apriDialogoPiano(), 'btn primario')));
 
     if (!n) {
@@ -282,7 +292,8 @@
         h('td', null, nomeClasse(p) || '—'),
         h('td', null, p.docente || '—'),
         h('td', null, p.anno),
-        h('td', null, barraAvanzamento(av)),
+        h('td', null, barraAvanzamento(av),
+          M.firmaValida(p.firma) ? h('span', { class: 'badge-firma', title: 'Firmato il ' + D.dataLeggibile(p.firma.data) }, '✓ Firmato') : null),
         h('td', { class: 'data' }, dataBreve(p.modificato)),
         h('td', { class: 'col-azioni' },
           bottone('Anteprima', () => vai('#/anteprima/' + encodeURIComponent(p.id)), 'btn piccolo'),
@@ -310,10 +321,12 @@
       h('ol', { class: 'passi' },
         h('li', null, h('strong', null, 'Il referente prepara il modello d\'istituto'), ': intestazione della scuola, sezioni del piano, voci degli elenchi, discipline. Poi lo esporta e lo invia ai colleghi.'),
         h('li', null, h('strong', null, 'Ogni docente importa il modello'), ' con il pulsante «Importa file» e crea i propri piani: gran parte delle sezioni si compila con un clic.'),
-        h('li', null, h('strong', null, 'Il piano si scarica in Word o si stampa in PDF'), ', sempre con la stessa impaginazione.')),
+        h('li', null, h('strong', null, 'Il piano si firma con il dito e si scarica in Word o PDF'), ', sempre con la stessa impaginazione.'),
+        h('li', null, h('strong', null, 'Hai già un piano scritto?'), ' Caricalo: l\'app lo riporta nel modello della scuola.')),
       h('div', { class: 'azioni' },
         bottone('+ Crea il primo piano', () => apriDialogoPiano(), 'btn primario'),
-        bottone('Importa un file', importaFile),
+        bottone('Importa un piano già scritto (Word, OpenOffice)', importaPianoEsistente),
+        bottone('Importa un backup o un modello', importaFile),
         h('a', { class: 'btn', href: '#/modello' }, 'Configura il modello d\'istituto')));
   }
 
@@ -450,6 +463,19 @@
       }, h('span', { class: 'pallino', 'data-stato-indice': s.id, 'aria-hidden': 'true' }), (n ? n + '. ' : '') + s.titolo)));
       schede.push(schedaSezione(piano, s, n));
     });
+    (piano.extra || []).forEach((x, i) => {
+      const n = ++numero;
+      voci.push(h('li', null, h('a', {
+        href: '#sez-extra-' + x.id,
+        onclick: (e) => { e.preventDefault(); document.getElementById('sez-extra-' + x.id).scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      }, h('span', { class: 'pallino extra', 'aria-hidden': 'true' }), n + '. ' + (x.titolo || 'Sezione aggiuntiva'))));
+      schede.push(schedaExtra(piano, x, n, i === 0));
+    });
+    voci.push(h('li', null, h('a', {
+      href: '#sez-firma',
+      onclick: (e) => { e.preventDefault(); document.getElementById('sez-firma').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    }, h('span', { class: 'pallino', id: 'pallino-firma', 'aria-hidden': 'true' }), 'Firma')));
+    schede.push(schedaFirma(piano));
 
     const barra = h('div', { class: 'barra-editor' },
       h('div', { class: 'barra-titolo' },
@@ -486,6 +512,79 @@
     });
     const t = document.getElementById('titolo-piano');
     if (t) t.textContent = M.titoloPiano(piano);
+    const pf = document.getElementById('pallino-firma');
+    if (pf) pf.classList.toggle('completa', !!M.firmaValida(piano.firma));
+    const af = document.getElementById('avviso-firma');
+    if (af) af.hidden = !M.modificatoDopoFirma(piano);
+  }
+
+  function schedaExtra(piano, x, numero, prima) {
+    return h('section', { class: 'card sezione extra', id: 'sez-extra-' + x.id },
+      h('header', { class: 'card-testa' },
+        h('h2', null, numero + '. ', h('input', {
+          type: 'text', class: 'titolo-extra', value: x.titolo, 'aria-label': 'Titolo della sezione aggiuntiva',
+          oninput: (e) => { x.titolo = e.target.value; modificato(piano); }
+        })),
+        h('span', { class: 'badge-stato' }, 'Sezione aggiuntiva')),
+      prima ? h('p', { class: 'guida' }, 'Questa parte del piano importato non corrisponde a nessuna sezione del modello d\'istituto. Puoi lasciarla (comparirà nel documento con l\'impaginazione della scuola), spostarne il testo nella sezione giusta oppure eliminarla.') : null,
+      areaTesto(x.testo, (t) => { x.testo = t; modificato(piano); }, { rows: 4, 'aria-label': x.titolo || 'Sezione aggiuntiva' }),
+      h('div', { class: 'azioni' }, bottone('Elimina questa sezione', () => {
+        if (x.testo.trim() && !confirm(`Eliminare la sezione «${x.titolo}» e il suo testo?`)) return;
+        piano.extra = piano.extra.filter((y) => y !== x);
+        modificato(piano);
+        render({ mantieniScroll: true });
+      }, 'btn piccolo pericolo')));
+  }
+
+  async function firmaPiano(piano) {
+    if (!F) return false;
+    const immagine = await F.apriFirma({ titolo: 'Firma il piano di lavoro', nome: piano.docente });
+    if (!immagine) return false;
+    piano.modificato = new Date().toISOString();
+    piano.firma = { immagine, data: dataOggi(), momento: piano.modificato };
+    salvaPianiOra();
+    toast('Piano firmato.');
+    return true;
+  }
+
+  function schedaFirma(piano) {
+    const f = M.firmaValida(piano.firma);
+    const corpo = f
+      ? [
+        h('div', { class: 'firma-attuale' },
+          h('img', { src: f.immagine, alt: 'Firma di ' + (piano.docente || 'docente'), class: 'anteprima-firma' }),
+          h('div', null,
+            campo('Data della firma', h('input', {
+              type: 'date', value: f.data,
+              onchange: (e) => {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) return;
+                piano.firma.data = e.target.value;
+                piano.modificato = new Date().toISOString();
+                piano.firma.momento = piano.modificato;
+                salvaPianiOra();
+              }
+            })),
+            h('p', { class: 'avviso-firma', id: 'avviso-firma', hidden: !M.modificatoDopoFirma(piano) },
+              '⚠ Il piano è stato modificato dopo la firma: se le modifiche sono importanti, firmalo di nuovo.'))),
+        h('div', { class: 'azioni' },
+          bottone('Firma di nuovo', async () => { if (await firmaPiano(piano)) render({ mantieniScroll: true }); }),
+          bottone('Rimuovi la firma', () => {
+            if (!confirm('Rimuovere la firma da questo piano?')) return;
+            delete piano.firma;
+            modificato(piano);
+            render({ mantieniScroll: true });
+          }, 'btn pericolo'))
+      ]
+      : [
+        h('p', null, 'Firma con il dito su tablet o smartphone, oppure con la penna o il mouse. La firma comparirà in fondo al documento, nel PDF e nel file Word.'),
+        h('div', { class: 'azioni' }, bottone('✍ Firma con il dito', async () => { if (await firmaPiano(piano)) render({ mantieniScroll: true }); }, 'btn primario'))
+      ];
+    return h('section', { class: 'card sezione', id: 'sez-firma', 'aria-labelledby': 'tit-firma' },
+      h('header', { class: 'card-testa' },
+        h('h2', { id: 'tit-firma' }, 'Firma del docente'),
+        h('span', { class: 'badge-stato' + (f ? ' completa' : '') }, f ? '✓ Firmato' : 'Da firmare')),
+      corpo,
+      h('p', { class: 'nota' }, 'È una firma grafica (firma elettronica semplice), adatta ai documenti interni. Se la scuola richiede la firma digitale, applicala al PDF con gli strumenti previsti.'));
   }
 
   function modificato(piano) {
@@ -717,18 +816,25 @@
       h('div', { class: 'barra-anteprima' },
         h('a', { href: ritorno, class: 'btn' }, piani.length === 1 ? '← Torna alla compilazione' : '← Torna all\'elenco'),
         h('div', { class: 'azioni' },
+          piani.length === 1 ? bottone(M.firmaValida(piani[0].firma) ? '✍ Firma di nuovo' : '✍ Firma con il dito',
+            async () => { if (await firmaPiano(piani[0])) render({ mantieniScroll: true }); }) : null,
           bottone('Stampa o salva PDF', () => window.print(), 'btn primario'),
           bottone('Scarica Word', () => scaricaWord(piani))),
         h('p', { class: 'nota' }, 'Per il PDF scegli «Salva come PDF» come stampante nella finestra di stampa.')),
       ...piani.map((p) => h('div', { class: 'foglio', html: D.renderPiano(p, stato.modello) })));
   }
 
-  function scaricaWord(piani) {
+  async function scaricaWord(piani) {
     if (!piani.length) return;
     salvaPianiOra();
-    const nome = piani.length === 1 ? M.nomeFile(piani[0], 'doc') : `Piani di lavoro (${piani.length}).doc`;
-    scarica(nome, '﻿' + D.documentoWord(piani, stato.modello), 'application/msword');
-    toast('Documento Word scaricato.');
+    try {
+      const dati = await W.creaDocx(piani, stato.modello);
+      const nome = piani.length === 1 ? M.nomeFile(piani[0], 'docx') : `Piani di lavoro (${piani.length}).docx`;
+      scarica(nome, dati, W.MIME);
+      toast('Documento Word scaricato.');
+    } catch (e) {
+      toast('Non è stato possibile creare il documento Word: ' + e.message, 'errore');
+    }
   }
 
   function esportaPiani(piani, nome) {
@@ -738,8 +844,9 @@
   }
 
   async function importaFile() {
-    const contenuto = await chiediFile('.json,application/json');
-    const r = M.leggiPacchetto(contenuto);
+    const file = await chiediFile('.json,application/json,' + FORMATI_PIANO);
+    if (!/\.json$/i.test(file.nome)) { avviaImportazionePiano(file); return; }
+    const r = M.leggiPacchetto(new TextDecoder().decode(file.dati));
     if (r.errore) { toast(r.errore, 'errore'); return; }
     if (r.tipo === 'modello') {
       if (!confirm('Il file contiene un modello d\'istituto. Sostituire il modello attuale? I piani già compilati non vengono modificati.')) return;
@@ -754,6 +861,116 @@
       toast(`Importazione completata: ${stat.aggiunti} nuovi, ${stat.aggiornati} aggiornati` + (stat.ignorati ? `, ${stat.ignorati} già presenti.` : '.'));
       vai('#/piani');
     }
+  }
+
+  /* ================= Importazione di un piano già scritto ================= */
+
+  async function importaPianoEsistente() {
+    avviaImportazionePiano(await chiediFile(FORMATI_PIANO));
+  }
+
+  async function avviaImportazionePiano(file) {
+    try {
+      const blocchi = await I.leggiFile(file.nome, file.dati);
+      const analisi = I.analizza(blocchi, stato.modello);
+      if (!analisi.segmenti.length) { toast('Il documento sembra vuoto: non c\'è testo da importare.', 'errore'); return; }
+      const pref = S.preferenze();
+      stato.importazione = {
+        nome: file.nome,
+        analisi,
+        scelte: analisi.segmenti.map((x) => x.proposta),
+        dati: Object.assign({
+          docente: pref.docente || '', disciplina: '', classe: '', sezione: '',
+          anno: stato.modello.scuola.annoScolastico, ore: '', libro: ''
+        }, analisi.dati)
+      };
+      vai('#/importa');
+    } catch (e) {
+      toast(e.message || 'Impossibile leggere il documento.', 'errore');
+    }
+  }
+
+  function vistaImporta() {
+    const imp = stato.importazione;
+    if (!imp) {
+      app.append(h('div', { class: 'card' },
+        h('p', null, 'Nessun documento in corso di importazione.'),
+        h('div', { class: 'azioni' }, bottone('Scegli un file', importaPianoEsistente, 'btn primario'), h('a', { href: '#/piani', class: 'btn' }, 'Torna all\'elenco'))));
+      return;
+    }
+    const m = stato.modello;
+    const d = imp.dati;
+    const segmenti = imp.analisi.segmenti;
+    const riconosciute = segmenti.filter((x) => x.riconosciuta).length;
+    const daImportare = segmenti.filter((x) => !x.intestazione).length;
+
+    app.append(intestazioneVista('Importa un piano già scritto', `Documento: ${imp.nome}`,
+      bottone('Scegli un altro file', importaPianoEsistente)));
+
+    // Dati generali
+    const discipline = m.discipline.map((x) => x.nome);
+    if (d.disciplina && !discipline.includes(d.disciplina)) discipline.push(d.disciplina);
+    const testoCampo = (k, attrs = {}) => h('input', Object.assign({ type: 'text', value: d[k] || '', oninput: (e) => { d[k] = e.target.value; } }, attrs));
+    app.append(h('section', { class: 'card' },
+      h('h2', null, '1. Controlla i dati generali'),
+      h('p', { class: 'nota' }, 'Li ho letti dal documento: correggi o completa quello che manca.'),
+      h('div', { class: 'griglia-4' },
+        campo('Docente *', testoCampo('docente', { autocomplete: 'name' }), 'campo largo-2'),
+        campo('Disciplina *', selezione([{ valore: '', testo: '— scegli —' }].concat(discipline.map((x) => ({ valore: x, testo: x }))),
+          d.disciplina, (v) => { d.disciplina = v; }), 'campo largo-2'),
+        campo('Classe *', selezione([{ valore: '', testo: '—' }, { valore: '1', testo: 'Prima' }, { valore: '2', testo: 'Seconda' }, { valore: '3', testo: 'Terza' }],
+          d.classe, (v) => { d.classe = v; })),
+        campo('Sezione *', testoCampo('sezione', { maxlength: 6 })),
+        campo('Anno scolastico', testoCampo('anno')),
+        campo('Ore settimanali', h('input', { type: 'number', min: 0, max: 40, value: d.ore || '', oninput: (e) => { d.ore = e.target.value; } })),
+        campo('Libro di testo', testoCampo('libro'), 'campo largo-2'))));
+
+    // Sezioni
+    const destinazioni = [];
+    let n = 0;
+    M.sezioniAttive(m).forEach((sez) => { if (sez.tipo !== 'dati') destinazioni.push({ valore: sez.id, testo: `${++n}. ${sez.titolo}` }); });
+    const righe = segmenti.map((seg, i) => {
+      const anteprima = seg.testo.length > 260 ? seg.testo.slice(0, 260) + '…' : seg.testo;
+      const opzioni = destinazioni.concat([
+        { valore: I.EXTRA, testo: `➕ Sezione aggiuntiva «${seg.titolo}»` },
+        { valore: I.IGNORA, testo: '✕ Non importare' }
+      ]);
+      const etichetta = seg.intestazione ? ['intestazione', 'Intestazione'] : seg.riconosciuta ? ['riconosciuta', 'Riconosciuta'] : ['nuova', 'Non prevista dal modello'];
+      const riga = h('div', { class: 'seg-import' + (imp.scelte[i] === I.IGNORA ? ' ignorata' : '') },
+        h('div', { class: 'seg-testo' },
+          h('div', { class: 'seg-titolo' }, h('strong', null, seg.titolo), h('span', { class: 'badge-seg ' + etichetta[0] }, etichetta[1])),
+          h('p', { class: 'seg-anteprima' }, anteprima),
+          seg.testo.length > 260 ? h('details', null, h('summary', null, 'Mostra tutto il testo'), h('p', { class: 'seg-anteprima' }, seg.testo)) : null),
+        campo('Inserisci in', selezione(opzioni, imp.scelte[i], (v) => {
+          imp.scelte[i] = v;
+          riga.classList.toggle('ignorata', v === I.IGNORA);
+        }), 'campo seg-destinazione'));
+      return riga;
+    });
+    app.append(h('section', { class: 'card' },
+      h('h2', null, '2. Controlla dove va ogni parte'),
+      h('p', { class: 'nota' }, `Ho diviso il documento in ${daImportare} parti e ne ho abbinate ${riconosciute} alle sezioni del modello d'istituto. ` +
+        'Le parti non previste dal modello diventano sezioni aggiuntive: nessun testo va perso. Dove possibile le voci vengono spuntate automaticamente (metodologie, strumenti, verifiche…).'),
+      righe));
+
+    const errore = h('p', { class: 'errore-form', role: 'alert' });
+    app.append(h('section', { class: 'card' },
+      h('h2', null, '3. Crea il piano'),
+      h('p', null, 'Il piano verrà creato con la struttura e l\'impaginazione del modello d\'istituto. Il documento originale non viene modificato.'),
+      errore,
+      h('div', { class: 'azioni' },
+        bottone('Crea il piano uniformato', () => {
+          const mancanti = ['docente', 'disciplina', 'classe', 'sezione'].filter((k) => !String(d[k] || '').trim());
+          if (mancanti.length) { errore.textContent = 'Compila nei dati generali: ' + mancanti.join(', ') + '.'; errore.scrollIntoView({ block: 'center' }); return; }
+          const piano = I.creaPiano(imp.analisi, imp.scelte, d, m);
+          stato.piani.push(piano);
+          salvaPianiOra();
+          S.salvaPreferenza('docente', d.docente.trim());
+          stato.importazione = null;
+          vai('#/piano/' + encodeURIComponent(piano.id));
+          toast('Piano importato nel modello della scuola. Controlla le sezioni e le voci spuntate automaticamente.');
+        }, 'btn primario'),
+        bottone('Annulla', () => { stato.importazione = null; vai('#/piani'); }))));
   }
 
   /* ================= Modello d'istituto ================= */
@@ -980,6 +1197,16 @@
           h('li', null, 'Premi «+ Nuovo piano», indica disciplina, classe e sezione. Scrivendo «A, B, C» crei tre piani insieme.'),
           h('li', null, 'Compila le sezioni: quasi tutto si fa spuntando le voci. L\'indice a sinistra mostra cosa manca.'),
           h('li', null, 'Premi «Anteprima e stampa» per il PDF, oppure «Scarica Word» per il file modificabile.'))),
+      blocco('Hai già un piano scritto?',
+        h('ol', null,
+          h('li', null, 'Premi «Importa un piano già scritto» e scegli il file (.docx di Word, .odt di LibreOffice o .txt).'),
+          h('li', null, 'L\'app riconosce docente, disciplina e classe e divide il documento nelle sue parti, abbinandole alle sezioni del modello d\'istituto.'),
+          h('li', null, 'Controlla gli abbinamenti e premi «Crea il piano uniformato»: il piano avrà la struttura e l\'aspetto comuni della scuola.')),
+        h('p', { class: 'nota' }, 'Le voci di metodologie, strumenti, verifiche, competenze e traguardi vengono spuntate quando il testo le cita in modo riconoscibile; il resto viene conservato come «altre voci» o note. ' +
+          'Le parti non previste dal modello diventano sezioni aggiuntive. I file .doc (Word 97-2003) vanno prima salvati come .docx; i PDF non sono supportati.')),
+      blocco('Firma',
+        h('p', null, 'In fondo alla compilazione, o dall\'anteprima, premi «Firma con il dito»: su tablet e smartphone si firma con il dito, al computer con il mouse o la penna. La firma compare nel PDF e nel file Word, con luogo e data.'),
+        h('p', { class: 'nota' }, 'Si tratta di una firma grafica (firma elettronica semplice): va bene per i documenti interni. Se il piano viene modificato dopo la firma, l\'app lo segnala.')),
       blocco('Per fare prima',
         h('ul', null,
           h('li', null, h('strong', null, 'Riparti dall\'anno scorso: '), 'crea il nuovo piano scegliendo «Copia i contenuti da un piano esistente». Viene azzerata solo la situazione di partenza.'),

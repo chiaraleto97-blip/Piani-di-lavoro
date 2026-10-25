@@ -128,9 +128,36 @@ test('il documento contiene i dati inseriti e ne esegue l\'escape', () => {
   assert.match(html, /Disegno tecnico/);
   assert.match(html, /Usare squadre<br>Usare il compasso/);
   assert.match(html, /Sezione non compilata/);
-  const word = D.documentoWord([p, p], m);
-  assert.match(word, /urn:schemas-microsoft-com:office:word/);
-  assert.equal((word.match(/page-break-before/g) || []).length, 1);
+});
+
+test('firma: solo immagini PNG valide, non copiata nei duplicati, mostrata nel documento', () => {
+  const m = modello();
+  const png = 'data:image/png;base64,iVBORw0KGgo=';
+  assert.equal(M.firmaValida({ immagine: 'javascript:alert(1)' }), null);
+  assert.equal(M.firmaValida({ immagine: 'data:image/svg+xml;base64,PHN2Zz4=' }), null);
+  const f = M.firmaValida({ immagine: png, data: '2026-10-25', momento: '2026-10-25T10:00:00.000Z' });
+  assert.equal(f.data, '2026-10-25');
+
+  const p = M.nuovoPiano(m, { docente: 'Rossi', disciplina: 'Musica', classe: '1', sezione: 'A' });
+  p.firma = f;
+  p.extra = [{ titolo: 'Concerto di Natale', testo: 'Prove a dicembre.' }];
+  const letto = M.normalizzaPiano(JSON.parse(JSON.stringify(p)));
+  assert.deepEqual(letto.firma, f);
+  assert.equal(letto.extra[0].titolo, 'Concerto di Natale');
+
+  const copia = M.copiaContenuti(M.nuovoPiano(m, { disciplina: 'Musica' }), p, m);
+  assert.equal(copia.firma, undefined);
+  assert.equal(copia.extra[0].testo, 'Prove a dicembre.');
+
+  p.modificato = '2026-10-25T09:00:00.000Z';
+  assert.equal(M.modificatoDopoFirma(p), false);
+  p.modificato = '2026-10-26T09:00:00.000Z';
+  assert.equal(M.modificatoDopoFirma(p), true);
+
+  const html = D.renderPiano(p, m);
+  assert.match(html, /<img class="doc-firma-img"/);
+  assert.match(html, /25\/10\/2026/);
+  assert.match(html, /14\. Concerto di Natale/);
 });
 
 test('le sezioni disattivate non compaiono nel documento', () => {
