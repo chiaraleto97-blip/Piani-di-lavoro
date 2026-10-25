@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  const { model: M, documento: D, store: S, word: W, importa: I, firma: F } = window.PDL;
+  const { model: M, documento: D, store: S, word: W, importa: I, firma: F, fogli: FG } = window.PDL;
   const app = document.getElementById('app');
 
   const stato = {
@@ -14,7 +14,8 @@
     piani: [],
     selezionati: new Set(),
     filtri: { testo: '', anno: '', classe: '' },
-    importazione: null
+    importazione: null,
+    foglio: { avvisi: [], errore: '', inCorso: false }
   };
 
   const FORMATI_PIANO = '.docx,.odt,.txt,.doc,.pdf';
@@ -405,6 +406,7 @@
           if (src) M.copiaContenuti(p, src, m);
           return p;
         });
+        nuovi.forEach((p) => M.applicaDatiComuni(p, m));
         stato.piani.push(...nuovi);
         salvaPianiOra();
         S.salvaPreferenza('docente', dati.docente.trim());
@@ -430,6 +432,7 @@
       campo('Ore settimanali', inputOre)),
     campo('Libro di testo', h('input', { type: 'text', value: dati.libro, oninput: (e) => { dati.libro = e.target.value; } })),
     h('p', { class: 'nota' }, 'Suggerimento: scrivendo più sezioni (es. «A, B, C») si crea un piano per ciascuna classe in un colpo solo.'),
+    haDatiComuni() ? h('p', { class: 'nota nota-foglio' }, '📋 Plesso, libro di testo e numero di alunni (con PEI e PDP) verranno presi dal foglio comune della scuola.') : null,
     altriPiani.length ? campo('Copia i contenuti da un piano esistente', selOrigine) : null,
     altriPiani.length ? h('p', { class: 'nota' }, 'Utile per ripartire dal piano dell\'anno scorso o da quello di un collega: vengono copiate tutte le sezioni tranne la situazione di partenza.') : null,
     errore,
@@ -617,8 +620,25 @@
     }
   }
 
+  // Etichetta e attributi per i campi che arrivano dal foglio comune (sola lettura).
+  const TITOLO_FOGLIO = 'Dato comune della classe, gestito nel foglio condiviso della scuola: per correggerlo rivolgiti al referente.';
+  function etichettaFoglio(testo, daFoglio) {
+    return daFoglio ? [testo, ' ', h('span', { class: 'badge-foglio', title: TITOLO_FOGLIO }, '📋 foglio comune')] : testo;
+  }
+  function attributiFoglio(daFoglio) {
+    return daFoglio ? { readonly: true, class: 'da-foglio', title: TITOLO_FOGLIO, 'aria-readonly': 'true' } : {};
+  }
+
+  // Dopo un cambio di classe, sezione, disciplina o anno si riallineano i dati comuni.
+  function riallineaDatiComuni(piano) {
+    M.applicaDatiComuni(piano, stato.modello);
+    modificato(piano);
+    render({ mantieniScroll: true });
+  }
+
   function editorDati(piano) {
     const m = stato.modello;
+    const comuni = M.datiComuniPer(m, piano) || { num: {} };
     const testoCampo = (id, attrs = {}) => h('input', Object.assign({
       type: 'text', value: piano[id], oninput: (e) => { piano[id] = e.target.value; modificato(piano); }
     }, attrs));
@@ -632,17 +652,16 @@
           const dopo = M.trovaDisciplina(m, v);
           piano.disciplina = v;
           if (dopo && dopo.ore !== '' && (!piano.ore || (prima && String(prima.ore) === piano.ore))) piano.ore = String(dopo.ore);
-          modificato(piano);
-          // Traguardi e nuclei tematici dipendono dalla disciplina.
-          render({ mantieniScroll: true });
+          // Traguardi, nuclei tematici e libro di testo dipendono dalla disciplina.
+          riallineaDatiComuni(piano);
         }), 'campo largo-2'),
       campo('Classe', selezione([{ valore: '', testo: '—' }].concat(Object.keys(NOMI_CLASSI).map((k) => ({ valore: k, testo: NOMI_CLASSI[k] }))),
-        piano.classe, (v) => { piano.classe = v; modificato(piano); })),
-      campo('Sezione', testoCampo('sezione', { maxlength: 6 })),
-      campo('Anno scolastico', testoCampo('anno')),
+        piano.classe, (v) => { piano.classe = v; riallineaDatiComuni(piano); })),
+      campo('Sezione', testoCampo('sezione', { maxlength: 6, onchange: () => { piano.sezione = piano.sezione.trim().toUpperCase(); riallineaDatiComuni(piano); } })),
+      campo('Anno scolastico', testoCampo('anno', { onchange: () => riallineaDatiComuni(piano) })),
       campo('Ore settimanali', h('input', { type: 'number', min: 0, max: 40, value: piano.ore, oninput: (e) => { piano.ore = e.target.value; modificato(piano); } })),
-      campo('Libro di testo', testoCampo('libro'), 'campo largo-2'),
-      campo('Plesso / sede (facoltativo)', testoCampo('plesso'), 'campo largo-2'));
+      campo(etichettaFoglio('Libro di testo', comuni.libro != null), testoCampo('libro', attributiFoglio(comuni.libro != null)), 'campo largo-2'),
+      campo(etichettaFoglio('Plesso / sede', comuni.plesso != null), testoCampo('plesso', attributiFoglio(comuni.plesso != null)), 'campo largo-2'));
   }
 
   function numero(valore, oninput, attrs = {}) {
@@ -655,9 +674,12 @@
     const aggiornaAvvisi = () => avvisi.replaceChildren(...M.avvisiSituazione(v, stato.modello.livelli).map((a) => h('p', null, '⚠ ' + a)));
     const cambia = () => { aggiornaAvvisi(); modificato(piano); };
     aggiornaAvvisi();
+    const comuni = (M.datiComuniPer(stato.modello, piano) || { num: {} }).num;
     return [
       h('h3', null, 'Composizione della classe'),
-      h('div', { class: 'griglia-numeri' }, M.CAMPI_SITUAZIONE.map((c) => campo(c.etichetta, numero(v.num[c.id], (x) => { v.num[c.id] = x; cambia(); })))),
+      Object.keys(comuni).length ? h('p', { class: 'nota nota-foglio' }, '📋 I numeri segnati arrivano dal foglio comune della scuola e sono uguali per tutti i docenti della classe.') : null,
+      h('div', { class: 'griglia-numeri' }, M.CAMPI_SITUAZIONE.map((c) => campo(etichettaFoglio(c.etichetta, comuni[c.id] != null),
+        numero(v.num[c.id], (x) => { v.num[c.id] = x; cambia(); }, attributiFoglio(comuni[c.id] != null))))),
       h('h3', null, 'Fasce di livello (numero di alunni)'),
       h('div', { class: 'griglia-numeri' }, stato.modello.livelli.map((l) => campo(l, numero(v.livelli[l], (x) => { v.livelli[l] = x; cambia(); })))),
       avvisi,
@@ -852,6 +874,8 @@
       if (!confirm('Il file contiene un modello d\'istituto. Sostituire il modello attuale? I piani già compilati non vengono modificati.')) return;
       stato.modello = r.modello;
       salvaModelloOra();
+      sincronizzaDatiComuni();
+      aggiornaDalFoglio();
       toast('Modello d\'istituto importato.');
       render();
     } else {
@@ -963,6 +987,7 @@
           const mancanti = ['docente', 'disciplina', 'classe', 'sezione'].filter((k) => !String(d[k] || '').trim());
           if (mancanti.length) { errore.textContent = 'Compila nei dati generali: ' + mancanti.join(', ') + '.'; errore.scrollIntoView({ block: 'center' }); return; }
           const piano = I.creaPiano(imp.analisi, imp.scelte, d, m);
+          M.applicaDatiComuni(piano, m);
           stato.piani.push(piano);
           salvaPianiOra();
           S.salvaPreferenza('docente', d.docente.trim());
@@ -995,6 +1020,7 @@
       h('fieldset', { class: 'modello', disabled: m.bloccato },
         h('legend', { class: 'sr' }, 'Impostazioni del modello'),
         schedaScuola(m), schedaSezioniModello(m), schedaDiscipline(m)),
+      schedaDatiComuni(m),
       schedaCondivisione(m));
   }
 
@@ -1151,6 +1177,8 @@
 
   function schedaCondivisione(m) {
     const blocca = h('input', { type: 'checkbox', checked: true });
+    const conDati = h('input', { type: 'checkbox', checked: true });
+    const numeroDati = m.datiComuni.classi.length + m.datiComuni.libri.length;
     return h('section', { class: 'card' },
       h('h2', null, 'Distribuzione ai docenti'),
       h('ol', { class: 'passi' },
@@ -1158,10 +1186,13 @@
         h('li', null, 'Ogni docente apre l\'app e usa «Importa file»: da quel momento tutti compilano la stessa struttura.'),
         h('li', null, 'Se l\'app è pubblicata sul sito della scuola, salva il file come ', h('code', null, 'modello-istituto.json'), ' accanto a ', h('code', null, 'index.html'), ': i docenti lo riceveranno automaticamente, anche quando lo aggiorni.')),
       h('label', { class: 'voce piccola' }, blocca, h('span', null, 'Distribuisci in sola lettura (i docenti non lo modificano per errore)')),
+      numeroDati ? h('label', { class: 'voce piccola' }, conDati, h('span', null, 'Includi i dati comuni delle classi (alunni, PEI, PDP, libri). ' +
+        'Togli la spunta se pubblichi il modello sul sito: i docenti leggeranno i dati direttamente dal foglio.')) : null,
       h('div', { class: 'azioni' },
         bottone('Esporta il modello', () => {
           const copia = M.clona(m);
           copia.bloccato = blocca.checked;
+          if (!conDati.checked) { copia.datiComuni.classi = []; copia.datiComuni.libri = []; copia.datiComuni.aggiornato = ''; }
           copia.aggiornato = m.aggiornato || new Date().toISOString();
           scarica('modello-istituto.json', JSON.stringify(M.pacchettoModello(copia), null, 2), 'application/json');
           toast('Modello esportato.');
@@ -1177,6 +1208,116 @@
           render();
           toast('Modello predefinito ripristinato.');
         }, 'btn pericolo')));
+  }
+
+  /* ================= Dati comuni delle classi (foglio condiviso) ================= */
+
+  function haDatiComuni() {
+    const dc = stato.modello.datiComuni;
+    return dc.classi.length + dc.libri.length > 0;
+  }
+
+  function sincronizzaDatiComuni() {
+    let n = 0;
+    stato.piani.forEach((p) => { if (M.applicaDatiComuni(p, stato.modello)) n++; });
+    if (n) salvaPianiOra();
+    return n;
+  }
+
+  // Legge il foglio (dal link o da un file) e aggiorna modello e piani.
+  async function caricaFoglio({ link, file }) {
+    const m = stato.modello;
+    const r = file ? await FG.daFile(file.nome, file.dati, m) : await FG.daLink(link, m);
+    if (!r.classi.length && !r.libri.length) {
+      throw new Error('Nel foglio non ho trovato dati: servono le schede «Classi» e «Libri» con la colonna «Classe» (scarica il modello del foglio).');
+    }
+    m.datiComuni = M.normalizzaDatiComuni({
+      url: link != null ? link : m.datiComuni.url,
+      aggiornato: new Date().toISOString(),
+      anno: m.scuola.annoScolastico,
+      classi: r.classi,
+      libri: r.libri
+    });
+    stato.foglio.avvisi = r.avvisi;
+    stato.foglio.errore = '';
+    salvaModelloOra();
+    return sincronizzaDatiComuni();
+  }
+
+  // All'avvio, se il modello indica un foglio, si leggono i dati aggiornati.
+  function aggiornaDalFoglio() {
+    const url = stato.modello.datiComuni.url;
+    if (!url || stato.foglio.inCorso) return;
+    stato.foglio.inCorso = true;
+    caricaFoglio({ link: url })
+      .then((n) => {
+        if (n) toast(`Dati comuni delle classi aggiornati in ${n} ${n === 1 ? 'piano' : 'piani'}.`);
+        if (/^#\/(modello|piano\/)/.test(location.hash)) render({ mantieniScroll: true });
+      })
+      // Senza connessione restano validi gli ultimi dati scaricati.
+      .catch((e) => { stato.foglio.errore = e.message; })
+      .finally(() => { stato.foglio.inCorso = false; });
+  }
+
+  function schedaDatiComuni(m) {
+    const dc = m.datiComuni;
+    const inputLink = h('input', {
+      type: 'url', value: dc.url, placeholder: 'https://docs.google.com/spreadsheets/d/…',
+      'aria-label': 'Link del foglio Google', disabled: m.bloccato
+    });
+    const esegui = async (origine) => {
+      try {
+        const n = await caricaFoglio(origine);
+        toast(`Foglio letto: ${m.datiComuni.classi.length} classi e ${m.datiComuni.libri.length} libri di testo` + (n ? `; aggiornati ${n} piani.` : '.'));
+      } catch (e) {
+        stato.foglio.errore = e.message;
+        toast(e.message, 'errore');
+      }
+      render({ mantieniScroll: true });
+    };
+    const stato_ = [];
+    if (dc.aggiornato) {
+      stato_.push(h('p', { class: 'stato-foglio' }, `✓ Ultimo aggiornamento ${dataBreve(dc.aggiornato)} · ${dc.classi.length} classi · ${dc.libri.length} libri di testo · a.s. ${dc.anno || '—'}`));
+    }
+    if (stato.foglio.errore) stato_.push(h('p', { class: 'avviso-firma' }, '⚠ ' + stato.foglio.errore + (dc.aggiornato ? ' Restano validi i dati dell\'ultimo aggiornamento.' : '')));
+    stato.foglio.avvisi.forEach((a) => stato_.push(h('p', { class: 'avviso-firma' }, '⚠ ' + a)));
+    const tabella = dc.classi.length ? h('details', null, h('summary', null, 'Vedi i dati delle classi'),
+      h('div', { class: 'tabella-scroll' }, h('table', { class: 'tabella compatta' },
+        h('thead', null, h('tr', null, ['Classe', 'Plesso', 'Alunni', 'M', 'F', 'PEI', 'PDP DSA', 'PDP altri BES'].map((t) => h('th', null, t)))),
+        h('tbody', null, dc.classi.map((c) => h('tr', null, [c.classe + c.sezione, c.plesso, c.alunni, c.maschi, c.femmine, c.h104, c.dsa, c.bes].map((x) => h('td', null, x || '—')))))))) : null;
+
+    return h('section', { class: 'card', id: 'dati-comuni' },
+      h('h2', null, 'Dati comuni delle classi (foglio Google)'),
+      h('p', null, 'Plesso, libri di testo e numero di alunni (anche con PEI e PDP) sono uguali per tutti i docenti di una classe: si tengono in un unico foglio e l\'app li inserisce da sola nei piani, in sola lettura. Quando il referente corregge il foglio, i piani si aggiornano.'),
+      h('ol', { class: 'passi' },
+        h('li', null, bottone('Scarica il modello del foglio', async () => {
+          const sezioni = [...new Set(stato.piani.map((p) => p.sezione).filter(Boolean))].sort();
+          scarica('Dati comuni delle classi.xlsx', await FG.creaModelloFoglio(m, sezioni.length ? sezioni : ['A', 'B', 'C']),
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        }, 'btn piccolo'), ' e caricalo su Google Drive (Nuovo → Caricamento file, poi «Apri con Fogli Google»). Contiene le schede «Classi» e «Libri».'),
+        h('li', null, 'Compila una riga per classe e una per ogni libro di testo. ', h('strong', null, 'Solo numeri, mai nomi di alunni.')),
+        h('li', null, 'In Fogli premi Condividi → «Chiunque abbia il link» → Visualizzatore, copia il link e incollalo qui sotto.')),
+      h('div', { class: 'riga-link' },
+        campo('Link del foglio Google', inputLink, 'campo cresce'),
+        h('div', { class: 'azioni' },
+          bottone(dc.url ? 'Aggiorna ora' : 'Collega e leggi', () => {
+            const link = m.bloccato ? dc.url : inputLink.value.trim();
+            if (!link) { toast('Incolla prima il link del foglio.', 'errore'); return; }
+            if (!m.bloccato && link !== dc.url) modelloModificato();
+            esegui({ link });
+          }, 'btn primario'))),
+      h('div', { class: 'azioni' },
+        bottone('Carica il foglio da file (.xlsx, .csv)', async () => esegui({ file: await chiediFile('.xlsx,.csv') })),
+        haDatiComuni() || dc.url ? bottone('Scollega il foglio', () => {
+          if (!confirm('Scollegare il foglio comune? I dati già copiati nei piani restano, ma tornano modificabili.')) return;
+          m.datiComuni = M.normalizzaDatiComuni(null);
+          stato.foglio = { avvisi: [], errore: '', inCorso: false };
+          modelloModificato();
+          render({ mantieniScroll: true });
+        }, 'btn pericolo', { disabled: m.bloccato }) : null),
+      stato_, tabella,
+      h('p', { class: 'nota' }, 'Il numero di alunni con PEI e PDP è un dato riservato: chi ha il link può vedere il foglio, quindi condividilo solo con i docenti e non pubblicarlo. ' +
+        'Se il dominio della scuola non permette la condivisione con link, scarica il foglio (File → Scarica → Microsoft Excel) e usa «Carica il foglio da file»: i dati vengono inclusi nel modello d\'istituto che distribuisci.'));
   }
 
   /* ================= Guida ================= */
@@ -1197,6 +1338,9 @@
           h('li', null, 'Premi «+ Nuovo piano», indica disciplina, classe e sezione. Scrivendo «A, B, C» crei tre piani insieme.'),
           h('li', null, 'Compila le sezioni: quasi tutto si fa spuntando le voci. L\'indice a sinistra mostra cosa manca.'),
           h('li', null, 'Premi «Anteprima e stampa» per il PDF, oppure «Scarica Word» per il file modificabile.'))),
+      blocco('Dati comuni delle classi',
+        h('p', null, 'Plesso, libri di testo e numero di alunni (con PEI e PDP) si gestiscono una sola volta in un foglio Google comune: il referente lo collega in «Modello d\'istituto → Dati comuni delle classi» e l\'app li inserisce in tutti i piani della classe, contrassegnati con 📋.'),
+        h('p', { class: 'nota' }, 'I campi con 📋 sono in sola lettura: per correggerli si modifica il foglio. Le celle lasciate vuote nel foglio restano compilabili dal docente. I dati si applicano ai piani dell\'anno scolastico in corso.')),
       blocco('Hai già un piano scritto?',
         h('ol', null,
           h('li', null, 'Premi «Importa un piano già scritto» e scegli il file (.docx di Word, .odt di LibreOffice o .txt).'),
@@ -1238,6 +1382,8 @@
         bottone('Aggiorna', () => {
           stato.modello = remoto;
           salvaModelloOra();
+          sincronizzaDatiComuni();
+          aggiornaDalFoglio();
           banner.replaceChildren();
           render({ mantieniScroll: true });
           toast('Modello d\'istituto aggiornato.');
@@ -1258,13 +1404,17 @@
 
     window.addEventListener('hashchange', () => render());
     aggiornaTestata();
+    sincronizzaDatiComuni();
     render();
+    aggiornaDalFoglio();
 
     S.caricaModelloIstituto().then((remoto) => {
       if (!remoto) return;
       if (!stato.modelloSalvato) {
         stato.modello = remoto;
         salvaModelloOra();
+        sincronizzaDatiComuni();
+        aggiornaDalFoglio();
         render({ mantieniScroll: true });
       } else if (remoto.aggiornato && remoto.aggiornato > (stato.modello.aggiornato || '')) {
         mostraAggiornamentoModello(remoto);

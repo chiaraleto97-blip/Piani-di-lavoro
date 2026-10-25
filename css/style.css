@@ -280,6 +280,22 @@ summary { cursor: pointer; color: var(--blu); font-size: .9rem; padding: .2rem 0
 .badge-seg.intestazione { background: #eef1f5; color: var(--testo-2); }
 .seg-destinazione { margin: 0; }
 
+/* ---------- Dati comuni (foglio condiviso) ---------- */
+
+input.da-foglio, input.da-foglio:focus { background: var(--blu-chiaro); border-color: #b9cfea; color: var(--testo); cursor: not-allowed; }
+.badge-foglio { font-size: .72rem; font-weight: 600; color: var(--blu-scuro); white-space: nowrap; }
+.nota-foglio { background: var(--blu-chiaro); border-radius: 6px; padding: .4rem .7rem; }
+.riga-link { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 .75rem; margin-top: .5rem; }
+.riga-link .cresce { flex: 1 1 320px; }
+.riga-link .azioni { margin-bottom: .75rem; }
+.stato-foglio { color: var(--verde); font-weight: 600; margin: .75rem 0 .25rem; }
+.tabella.compatta th, .tabella.compatta td { padding: .3rem .5rem; font-size: .85rem; }
+#dati-comuni details { margin: .5rem 0; }
+input[type=url] {
+  width: 100%; padding: .5rem .6rem; border: 1px solid var(--bordo); border-radius: 7px; background: #fff; color: var(--testo); font: inherit;
+}
+input[type=url]:disabled { background: var(--sfondo); color: var(--testo-2); }
+
 /* ---------- Anteprima ---------- */
 
 .barra-anteprima {
@@ -320,14 +336,14 @@ summary { cursor: pointer; color: var(--blu); font-size: .9rem; padding: .2rem 0
 
 @media (max-width: 700px) {
   /* Tabella dei piani come elenco di schede. */
-  .tabella thead { display: none; }
-  .tabella, .tabella tbody { display: block; }
-  .tabella tr { display: grid; grid-template-columns: 32px minmax(0, 1fr); padding: .6rem .4rem; border-bottom: 1px solid var(--bordo); }
-  .tabella tbody tr:last-child { border-bottom: 0; }
-  .tabella td { display: block; border: 0; padding: .1rem .3rem; }
-  .tabella td.col-check { grid-row: 1 / span 7; padding-top: .2rem; }
-  .tabella .col-azioni { text-align: left; white-space: normal; padding-top: .4rem; }
-  .tabella .col-azioni .btn { margin: 0 .25rem 0 0; }
+  .tabella:not(.compatta) thead { display: none; }
+  .tabella:not(.compatta), .tabella:not(.compatta) tbody { display: block; }
+  .tabella:not(.compatta) tr { display: grid; grid-template-columns: 32px minmax(0, 1fr); padding: .6rem .4rem; border-bottom: 1px solid var(--bordo); }
+  .tabella:not(.compatta) tbody tr:last-child { border-bottom: 0; }
+  .tabella:not(.compatta) td { display: block; border: 0; padding: .1rem .3rem; }
+  .tabella:not(.compatta) td.col-check { grid-row: 1 / span 7; padding-top: .2rem; }
+  .tabella:not(.compatta) .col-azioni { text-align: left; white-space: normal; padding-top: .4rem; }
+  .tabella:not(.compatta) .col-azioni .btn { margin: 0 .25rem 0 0; }
   .progresso { max-width: 240px; }
 }
 
@@ -360,3 +376,6 @@ summary { cursor: pointer; color: var(--blu); font-size: .9rem; padding: .2rem 0
   .doc-tab tr, .doc li { break-inside: avoid; }
   .doc-firma { break-inside: avoid; }
 }
+
+/* Nelle griglie di numeri i campi restano allineati anche con etichette su due righe. */
+.griglia-numeri .campo { justify-content: space-between; }

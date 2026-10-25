@@ -11,6 +11,9 @@ della scuola secondaria di primo grado.
 - **Unità di apprendimento** con periodo, ore, nuclei tematici della disciplina, obiettivi e contenuti.
 - **Scorciatoie**: più classi in un colpo solo («A, B, C»), duplicazione, copia dal piano
   dell'anno precedente o di un collega, copia delle UdA da un altro piano.
+- **Dati comuni delle classi da un foglio Google**: plesso, libri di testo e numero di alunni
+  (anche con PEI e PDP) si gestiscono una volta sola in un foglio condiviso e l'app li inserisce in
+  sola lettura in tutti i piani della classe; se il foglio viene corretto, i piani si aggiornano.
 - **Indice con avanzamento**: si vede subito quali sezioni mancano.
 - **Firma con il dito** (o con penna e mouse): compare in fondo al documento con luogo e data;
   l'app segnala se il piano viene modificato dopo la firma.
@@ -43,6 +46,24 @@ Se l'app è pubblicata online, basta salvare `modello-istituto.json` accanto a `
 viene caricato automaticamente al primo avvio e, quando viene aggiornato, ai docenti compare
 un avviso per applicare la nuova versione.
 
+## Dati comuni delle classi (foglio Google)
+
+1. In *Modello d'istituto → Dati comuni delle classi* scarica il modello del foglio (.xlsx) e
+   caricalo su Google Drive aprendolo con Fogli Google. Ha due schede:
+   - **Classi**: Classe, Sezione, Plesso, Alunni, Maschi, Femmine, Alunni con PEI,
+     Alunni con PDP (DSA), Alunni con PDP (altri BES);
+   - **Libri**: Classe, Sezione (vuota = tutte le sezioni), Disciplina, Libro di testo.
+2. Compila il foglio (solo numeri, mai nomi di alunni) e condividilo con
+   «Chiunque abbia il link → Visualizzatore».
+3. Incolla il link nell'app ed esporta il modello d'istituto: ogni docente, aprendo l'app,
+   legge i dati aggiornati dal foglio. Le celle vuote restano compilabili dal docente.
+
+Se il dominio della scuola non consente la condivisione con link, scarica il foglio come
+Microsoft Excel e usa *Carica il foglio da file*: i dati entrano nel modello d'istituto distribuito.
+Il numero di alunni con PEI e PDP è un dato riservato: il link va condiviso solo con i docenti e
+un modello con i dati delle classi non va pubblicato su un sito pubblico (all'esportazione si può
+escluderli: i docenti li leggeranno dal foglio).
+
 ## Dati
 
 I piani sono salvati nel `localStorage` del browser, quindi solo su quel computer e in quel
@@ -60,6 +81,7 @@ browser. È importante fare periodicamente *Backup di tutti i piani* dall'elenco
 | `js/zip.js` | Lettura e scrittura di archivi ZIP (formato di .docx e .odt) |
 | `js/importa.js` | Lettura di piani già scritti e conversione nel modello d'istituto |
 | `js/firma.js` | Riquadro per la firma con dito, penna o mouse |
+| `js/fogli.js` | Lettura del foglio comune (Google Fogli, .xlsx, .csv) e modello del foglio |
 | `js/store.js` | Salvataggio nel browser e caricamento del modello d'istituto |
 | `js/app.js` | Interfaccia |
 | `tests/campioni/` | Piani di esempio in vari formati usati dai test dell'importazione |

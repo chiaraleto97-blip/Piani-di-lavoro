@@ -27,9 +27,9 @@
     { id: 'maschi', etichetta: 'Maschi' },
     { id: 'femmine', etichetta: 'Femmine' },
     { id: 'ripetenti', etichetta: 'Ripetenti' },
-    { id: 'h104', etichetta: 'Con disabilità (L. 104/92)' },
-    { id: 'dsa', etichetta: 'Con DSA' },
-    { id: 'bes', etichetta: 'Altri BES' },
+    { id: 'h104', etichetta: 'Con PEI (L. 104/92)' },
+    { id: 'dsa', etichetta: 'Con PDP per DSA' },
+    { id: 'bes', etichetta: 'Con PDP per altri BES' },
     { id: 'nai', etichetta: 'Non italofoni / NAI' }
   ];
 
@@ -60,6 +60,7 @@
   // con i valori predefiniti, così che l'interfaccia possa fidarsi della forma.
   function normalizzaModello(m) {
     var base = defaults.modelloPredefinito();
+    base.datiComuni = normalizzaDatiComuni(null);
     if (!isOggetto(m)) return base;
     var out = {
       schema: 1,
@@ -69,7 +70,8 @@
       periodi: elencoStringhe(m.periodi).length ? elencoStringhe(m.periodi) : base.periodi,
       livelli: elencoStringhe(m.livelli).length ? elencoStringhe(m.livelli) : base.livelli,
       sezioni: [],
-      discipline: []
+      discipline: [],
+      datiComuni: normalizzaDatiComuni(m.datiComuni)
     };
 
     var visti = {};
@@ -112,6 +114,87 @@
       });
     });
     return out;
+  }
+
+  /* ---------- Dati comuni delle classi (foglio condiviso) ---------- */
+
+  // Dati uguali per tutti i docenti di una classe, gestiti in un foglio comune.
+  var CAMPI_COMUNI_NUMERICI = ['alunni', 'maschi', 'femmine', 'h104', 'dsa', 'bes'];
+
+  function numeroOVuoto(x) {
+    var t = testo(x).trim();
+    return /^\d{1,3}$/.test(t) ? String(Number(t)) : '';
+  }
+
+  function normalizzaDatiComuni(d) {
+    d = isOggetto(d) ? d : {};
+    return {
+      url: testo(d.url).trim(),
+      aggiornato: testo(d.aggiornato),
+      anno: testo(d.anno),
+      classi: (Array.isArray(d.classi) ? d.classi : []).filter(isOggetto).map(function (c) {
+        var out = { classe: testo(c.classe).trim(), sezione: testo(c.sezione).trim().toUpperCase(), plesso: testo(c.plesso).trim() };
+        CAMPI_COMUNI_NUMERICI.forEach(function (k) { out[k] = numeroOVuoto(c[k]); });
+        return out;
+      }).filter(function (c) { return c.classe && c.sezione; }),
+      libri: (Array.isArray(d.libri) ? d.libri : []).filter(isOggetto).map(function (l) {
+        return {
+          classe: testo(l.classe).trim(), sezione: testo(l.sezione).trim().toUpperCase(),
+          plesso: testo(l.plesso).trim(), disciplina: testo(l.disciplina).trim(), libro: testo(l.libro).trim()
+        };
+      }).filter(function (l) { return l.classe && l.disciplina && l.libro; })
+    };
+  }
+
+  /**
+   * Dati comuni che valgono per un piano (stessa classe, sezione e anno scolastico).
+   * Restituisce null se il foglio comune non dice nulla su quella classe.
+   * @returns {{plesso?: string, libro?: string, num: Object<string,string>} | null}
+   */
+  function datiComuniPer(modello, piano) {
+    var dc = modello.datiComuni;
+    if (!dc || (!dc.classi.length && !dc.libri.length)) return null;
+    if (dc.anno && testo(piano.anno).trim() && dc.anno !== testo(piano.anno).trim()) return null;
+    var classe = testo(piano.classe).trim();
+    var sezione = testo(piano.sezione).trim().toUpperCase();
+    if (!classe) return null;
+    var out = { num: {} };
+    var riga = dc.classi.filter(function (c) { return c.classe === classe && c.sezione === sezione; })[0];
+    if (riga) {
+      if (riga.plesso) out.plesso = riga.plesso;
+      CAMPI_COMUNI_NUMERICI.forEach(function (k) { if (riga[k] !== '') out.num[k] = riga[k]; });
+    }
+    var disciplina = testo(piano.disciplina).trim().toLowerCase();
+    var libri = dc.libri.filter(function (l) {
+      return l.classe === classe && l.disciplina.toLowerCase() === disciplina &&
+        (!l.sezione || l.sezione === sezione) &&
+        (!l.plesso || !out.plesso || l.plesso.toLowerCase() === out.plesso.toLowerCase());
+    });
+    // Una riga per la sezione specifica vince su quella valida per tutte le sezioni.
+    libri.sort(function (a, b) { return (b.sezione ? 1 : 0) - (a.sezione ? 1 : 0); });
+    if (libri.length) out.libro = libri[0].libro;
+    return out.plesso || out.libro || Object.keys(out.num).length ? out : null;
+  }
+
+  /**
+   * Copia nel piano i dati comuni della sua classe. Restituisce true se qualcosa è cambiato.
+   */
+  function applicaDatiComuni(piano, modello) {
+    var d = datiComuniPer(modello, piano);
+    if (!d) return false;
+    var cambiato = false;
+    ['plesso', 'libro'].forEach(function (k) {
+      if (d[k] != null && testo(piano[k]) !== d[k]) { piano[k] = d[k]; cambiato = true; }
+    });
+    var sez = modello.sezioni.filter(function (s) { return s.tipo === 'situazione'; })[0];
+    if (sez && Object.keys(d.num).length) {
+      var v = valoreSezione(piano, sez);
+      Object.keys(d.num).forEach(function (k) {
+        if (testo(v.num[k]) !== d.num[k]) { v.num[k] = d.num[k]; cambiato = true; }
+      });
+    }
+    if (cambiato) piano.modificato = new Date().toISOString();
+    return cambiato;
   }
 
   function trovaDisciplina(modello, nome) {
@@ -380,6 +463,10 @@
     avanzamento: avanzamento,
     avvisiSituazione: avvisiSituazione,
     normalizzaPiano: normalizzaPiano,
+    CAMPI_COMUNI_NUMERICI: CAMPI_COMUNI_NUMERICI,
+    normalizzaDatiComuni: normalizzaDatiComuni,
+    datiComuniPer: datiComuniPer,
+    applicaDatiComuni: applicaDatiComuni,
     normalizzaExtra: normalizzaExtra,
     nuovaSezioneExtra: nuovaSezioneExtra,
     firmaValida: firmaValida,

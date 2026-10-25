@@ -1088,7 +1088,7 @@
     leggiFile, leggiDocx, leggiOdt, leggiTesto,
     analizza, mappaTitolo, riconosciDati, riconosciDisciplina,
     abbina, numeriSituazione, unitaDaTabella, creaPiano,
-    norm
+    norm, scorriXml
   };
   root.PDL = root.PDL || {};
   root.PDL.importa = api;
