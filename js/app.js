@@ -14,6 +14,7 @@
     piani: [],
     selezionati: new Set(),
     filtri: { testo: '', anno: '', classe: '' },
+    memoriaDisponibile: true,
     importazione: null,
     foglio: { avvisi: [], errore: '', inCorso: false }
   };
@@ -147,13 +148,18 @@
   function salvaPianiOra() {
     clearTimeout(timerPiani);
     timerPiani = null;
-    const ok = S.salvaPiani(stato.piani);
     const el = document.getElementById('stato-salvataggio');
+    if (!stato.memoriaDisponibile) {
+      // Già segnalato una volta con l'avviso in alto: niente messaggi a ogni modifica.
+      if (el) { el.textContent = 'Non salvato: usa «Esporta file» per conservarlo'; el.classList.add('errore'); }
+      return false;
+    }
+    const ok = S.salvaPiani(stato.piani);
     if (el) {
       el.textContent = ok ? 'Salvato alle ' + new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) : 'Salvataggio non riuscito';
       el.classList.toggle('errore', !ok);
     }
-    if (!ok) toast('Salvataggio non riuscito: la memoria del browser è piena o non disponibile. Esporta subito i piani.', 'errore');
+    if (!ok) toast('Salvataggio non riuscito: la memoria del browser è piena. Esporta subito i piani.', 'errore');
     return ok;
   }
 
@@ -168,7 +174,7 @@
     clearTimeout(timerModello);
     timerModello = null;
     stato.modelloSalvato = true;
-    if (!S.salvaModello(stato.modello)) toast('Impossibile salvare il modello nel browser.', 'errore');
+    if (stato.memoriaDisponibile && !S.salvaModello(stato.modello)) toast('Impossibile salvare il modello nel browser.', 'errore');
     aggiornaTestata();
   }
 
@@ -185,14 +191,35 @@
 
   /* ================= Navigazione ================= */
 
-  function vai(hash) {
-    if (location.hash === hash) render();
-    else location.hash = hash;
+  // La schermata corrente è nell'indirizzo (#/piani, #/piano/…). Dove il browser non
+  // permette di cambiarlo (es. pagina incorporata in un riquadro protetto) resta in memoria.
+  let rottaInMemoria = null;
+
+  function rottaAttuale() {
+    return rottaInMemoria != null ? rottaInMemoria : location.hash;
   }
+
+  function vai(hash) {
+    if (rottaAttuale() === hash) { render(); return; }
+    if (rottaInMemoria == null) {
+      try { location.hash = hash; } catch (e) { /* si passa alla rotta in memoria */ }
+      if (location.hash === hash) return; // ci pensa l'evento hashchange
+    }
+    rottaInMemoria = hash;
+    render();
+  }
+
+  // I link interni passano da vai(), così funzionano anche con la rotta in memoria.
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a[href^="#/"]');
+    if (!a || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    vai(a.getAttribute('href'));
+  });
 
   function render(opzioni = {}) {
     if (timerModello) salvaModelloOra();
-    const parti = location.hash.replace(/^#\/?/, '').split('/');
+    const parti = rottaAttuale().replace(/^#\/?/, '').split('/');
     const vista = parti[0] || 'piani';
     const sezioneNav = ['piano', 'anteprima', 'importa'].includes(vista) ? 'piani' : vista;
     document.querySelectorAll('[data-nav]').forEach((a) => {
@@ -387,38 +414,41 @@
 
     const errore = h('p', { class: 'errore-form', role: 'alert' });
     const dlg = h('dialog', { class: 'dialogo', 'aria-labelledby': 'titolo-dialogo' });
-    const form = h('form', {
-      onsubmit: (e) => {
-        e.preventDefault();
-        const sezioni = M.elencoSezioniClasse(dati.sezione);
-        const mancanti = [];
-        if (!dati.docente.trim()) mancanti.push('docente');
-        if (!dati.disciplina) mancanti.push('disciplina');
-        if (!dati.classe) mancanti.push('classe');
-        if (!sezioni.length) mancanti.push('sezione');
-        if (mancanti.length) { errore.textContent = 'Compila: ' + mancanti.join(', ') + '.'; return; }
-        const src = stato.piani.find((p) => p.id === origine);
-        const esistenti = sezioni.filter((sz) => stato.piani.some((p) => p.disciplina === dati.disciplina && p.classe === dati.classe &&
-          p.sezione === sz && p.anno === dati.anno.trim() && p.docente.trim().toLowerCase() === dati.docente.trim().toLowerCase()));
-        if (esistenti.length && !confirm(`Esiste già un piano di ${dati.disciplina} per ${esistenti.map((s) => dati.classe + s).join(', ')} nello stesso anno. Crearne comunque un altro?`)) return;
-        const nuovi = sezioni.map((sz) => {
-          const p = M.nuovoPiano(m, Object.assign({}, dati, { sezione: sz }));
-          if (src) M.copiaContenuti(p, src, m);
-          return p;
-        });
-        nuovi.forEach((p) => M.applicaDatiComuni(p, m));
-        stato.piani.push(...nuovi);
-        salvaPianiOra();
-        S.salvaPreferenza('docente', dati.docente.trim());
-        dlg.close();
-        if (nuovi.length === 1) {
-          vai('#/piano/' + encodeURIComponent(nuovi[0].id));
-          toast(src ? 'Piano creato copiando i contenuti: controlla e completa la situazione di partenza.' : 'Piano creato.');
-        } else {
-          toast(`Creati ${nuovi.length} piani (${nuovi.map(nomeClasse).join(', ')}).`);
-          vai('#/piani');
-        }
+    // La conferma è gestita a mano e non con l'invio del modulo: in alcune pagine
+    // incorporate (riquadri protetti) l'invio dei moduli è bloccato dal browser.
+    const conferma = () => {
+      const sezioni = M.elencoSezioniClasse(dati.sezione);
+      const mancanti = [];
+      if (!dati.docente.trim()) mancanti.push('docente');
+      if (!dati.disciplina) mancanti.push('disciplina');
+      if (!dati.classe) mancanti.push('classe');
+      if (!sezioni.length) mancanti.push('sezione');
+      if (mancanti.length) { errore.textContent = 'Compila: ' + mancanti.join(', ') + '.'; return; }
+      const src = stato.piani.find((p) => p.id === origine);
+      const esistenti = sezioni.filter((sz) => stato.piani.some((p) => p.disciplina === dati.disciplina && p.classe === dati.classe &&
+        p.sezione === sz && p.anno === dati.anno.trim() && p.docente.trim().toLowerCase() === dati.docente.trim().toLowerCase()));
+      if (esistenti.length && !confirm(`Esiste già un piano di ${dati.disciplina} per ${esistenti.map((s) => dati.classe + s).join(', ')} nello stesso anno. Crearne comunque un altro?`)) return;
+      const nuovi = sezioni.map((sz) => {
+        const p = M.nuovoPiano(m, Object.assign({}, dati, { sezione: sz }));
+        if (src) M.copiaContenuti(p, src, m);
+        return p;
+      });
+      nuovi.forEach((p) => M.applicaDatiComuni(p, m));
+      stato.piani.push(...nuovi);
+      salvaPianiOra();
+      S.salvaPreferenza('docente', dati.docente.trim());
+      dlg.close();
+      if (nuovi.length === 1) {
+        vai('#/piano/' + encodeURIComponent(nuovi[0].id));
+        toast(src ? 'Piano creato copiando i contenuti: controlla e completa la situazione di partenza.' : 'Piano creato.');
+      } else {
+        toast(`Creati ${nuovi.length} piani (${nuovi.map(nomeClasse).join(', ')}).`);
+        vai('#/piani');
       }
+    };
+    const form = h('form', {
+      onsubmit: (e) => { e.preventDefault(); conferma(); },
+      onkeydown: (e) => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); conferma(); } }
     },
     h('h2', { id: 'titolo-dialogo' }, sorgente ? 'Duplica piano' : 'Nuovo piano di lavoro'),
     sorgente ? h('p', { class: 'nota' }, `I contenuti di «${M.titoloPiano(sorgente)}» verranno copiati nel nuovo piano. Indica la classe di destinazione.`) : null,
@@ -438,7 +468,7 @@
     errore,
     h('div', { class: 'azioni-dialogo' },
       bottone('Annulla', () => dlg.close()),
-      h('button', { type: 'submit', class: 'btn primario' }, sorgente ? 'Crea copia' : 'Crea piano')));
+      bottone(sorgente ? 'Crea copia' : 'Crea piano', conferma, 'btn primario', { 'data-conferma': '' })));
 
     dlg.append(form);
     dlg.addEventListener('close', () => dlg.remove());
@@ -1252,7 +1282,7 @@
     caricaFoglio({ link: url })
       .then((n) => {
         if (n) toast(`Dati comuni delle classi aggiornati in ${n} ${n === 1 ? 'piano' : 'piani'}.`);
-        if (/^#\/(modello|piano\/)/.test(location.hash)) render({ mantieniScroll: true });
+        if (/^#\/(modello|piano\/)/.test(rottaAttuale())) render({ mantieniScroll: true });
       })
       // Senza connessione restano validi gli ultimi dati scaricati.
       .catch((e) => { stato.foglio.errore = e.message; })
@@ -1396,6 +1426,13 @@
     stato.modello = salvato || M.normalizzaModello(null);
     stato.modelloSalvato = !!salvato;
     stato.piani = S.caricaPiani();
+    stato.memoriaDisponibile = S.memoriaDisponibile();
+    if (!stato.memoriaDisponibile) {
+      document.getElementById('banner').replaceChildren(h('div', { class: 'banner-info' },
+        h('p', null, h('strong', null, 'In questa finestra il browser non permette di salvare. '),
+          'Puoi provare l\'app, ma i piani si perdono chiudendola: per conservarli usa «Esporta file» o «Scarica Word». ' +
+          'Aprendo l\'app normalmente (non in anteprima o in navigazione anonima) il salvataggio è automatico.')));
+    }
 
     document.getElementById('btn-importa').addEventListener('click', importaFile);
     const stile = document.createElement('style');

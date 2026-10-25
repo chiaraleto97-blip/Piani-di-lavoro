@@ -28,6 +28,17 @@
     }
   }
 
+  // Alcuni contesti (riquadri protetti, certe finestre anonime) non permettono di salvare.
+  function memoriaDisponibile() {
+    try {
+      root.localStorage.setItem('pdl.prova', '1');
+      root.localStorage.removeItem('pdl.prova');
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function caricaModello() {
     var m = leggi(CHIAVE_MODELLO);
     return m ? model.normalizzaModello(m) : null;
@@ -71,6 +82,7 @@
   }
 
   root.PDL.store = {
+    memoriaDisponibile: memoriaDisponibile,
     caricaModello: caricaModello,
     salvaModello: salvaModello,
     caricaPiani: caricaPiani,
