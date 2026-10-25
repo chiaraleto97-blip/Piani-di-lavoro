@@ -1,0 +1,9 @@
+# Fine riga uniformi su Windows, macOS e Linux (evita conflitti "finti").
+* text=auto eol=lf
+
+# File binari: mai confrontati riga per riga.
+*.docx binary
+*.odt binary
+*.xlsx binary
+*.png binary
+*.pdf binary

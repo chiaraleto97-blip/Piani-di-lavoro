@@ -69,6 +69,13 @@ escluderli: i docenti li leggeranno dal foglio).
 I piani sono salvati nel `localStorage` del browser, quindi solo su quel computer e in quel
 browser. È importante fare periodicamente *Backup di tutti i piani* dall'elenco.
 
+## Collaborare
+
+Il codice stabile è nel branch `main`, protetto: le modifiche entrano con una pull request
+quando i test automatici passano. Il flusso di lavoro è descritto in
+[CONTRIBUTING.md](CONTRIBUTING.md); le regole per le sessioni di Claude Code in
+[CLAUDE.md](CLAUDE.md).
+
 ## Struttura del codice
 
 | File | Contenuto |
