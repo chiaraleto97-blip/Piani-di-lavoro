@@ -33,6 +33,7 @@
       const conferma = dlg.querySelector('[data-azione="conferma"]');
       const tratti = [];
       let tratto = null;
+      let dito = null; // puntatore (dito, penna o mouse) che sta disegnando il tratto
       let esito = null;
 
       function dimensiona() {
@@ -84,6 +85,10 @@
 
       canvas.addEventListener('pointerdown', (e) => {
         e.preventDefault();
+        // Un secondo dito o il palmo appoggiati mentre si firma vengono ignorati,
+        // altrimenti i punti dei due tocchi si mescolerebbero in linee spurie.
+        if (tratto && !e.isPrimary) return;
+        dito = e.pointerId;
         // Su alcuni dispositivi la cattura non è disponibile: si firma lo stesso.
         try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* nessun problema */ }
         tratto = { punti: [punto(e)] };
@@ -91,15 +96,16 @@
         ridisegna();
       });
       canvas.addEventListener('pointermove', (e) => {
-        if (!tratto) return;
+        if (!tratto || e.pointerId !== dito) return;
         e.preventDefault();
         const eventi = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
         (eventi.length ? eventi : [e]).forEach((ev) => tratto.punti.push(punto(ev)));
         ridisegna();
       });
-      const fine = () => {
-        if (!tratto) return;
+      const fine = (e) => {
+        if (!tratto || e.pointerId !== dito) return;
         tratto = null;
+        dito = null;
         conferma.disabled = !tratti.some((t) => t.punti.length > 2);
       };
       canvas.addEventListener('pointerup', fine);
